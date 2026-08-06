@@ -1,0 +1,20 @@
+{
+  "name": "vending-machine-supabase-backend",
+  "version": "1.0.0",
+  "description": "Backend & Consumer MQTT para la base de datos de Supabase del sistema de Vending Machine de Productos de Limpieza (ESP32 Zephyr)",
+  "main": "consumer.js",
+  "scripts": {
+    "start": "node consumer.js",
+    "dev": "nodemon consumer.js"
+  },
+  "author": "acovarrubiasd2500 <acovarrubiasd2500@alumno.ipn.mx>",
+  "license": "MIT",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "dotenv": "^16.4.5",
+    "mqtt": "^5.10.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  }
+}
