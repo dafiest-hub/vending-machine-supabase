@@ -8,8 +8,9 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ----------------------------------------------------------------------------
--- 1. TIPOS ENUM (MÉTODOS DE PAGO, ESTADOS Y CATEGORÍAS)
+-- 1. TIPOS ENUM (ROLES DE PWA, MÉTODOS DE PAGO, ESTADOS Y CATEGORÍAS)
 -- ----------------------------------------------------------------------------
+CREATE TYPE user_role_enum AS ENUM ('admin', 'technician', 'viewer');
 CREATE TYPE payment_type_enum AS ENUM ('monedas', 'efectivo', 'tarjeta');
 CREATE TYPE machine_operating_status AS ENUM ('online', 'offline', 'maintenance', 'security_lock');
 CREATE TYPE purchase_status_enum AS ENUM ('success', 'fail');
@@ -18,7 +19,20 @@ CREATE TYPE collection_status_enum AS ENUM ('success', 'fail');
 CREATE TYPE alert_category_enum AS ENUM ('security', 'pump', 'sales', 'stock', 'module');
 
 -- ----------------------------------------------------------------------------
--- 2. TABLA: MÁQUINAS EXPENDEDORAS (machines)
+-- 2. TABLA: PERFILES DE USUARIOS PWA (public.profiles)
+-- ----------------------------------------------------------------------------
+CREATE TABLE public.profiles (
+    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    full_name VARCHAR(150),
+    avatar_url TEXT,
+    role user_role_enum NOT NULL DEFAULT 'viewer',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ----------------------------------------------------------------------------
+-- 3. TABLA: MÁQUINAS EXPENDEDORAS (machines)
 -- ----------------------------------------------------------------------------
 CREATE TABLE machines (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -34,7 +48,7 @@ CREATE TABLE machines (
 );
 
 -- ----------------------------------------------------------------------------
--- 3. TABLA: CATÁLOGO DE PRODUCTOS (products)
+-- 4. TABLA: CATÁLOGO DE PRODUCTOS (products)
 -- ----------------------------------------------------------------------------
 CREATE TABLE products (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -47,7 +61,7 @@ CREATE TABLE products (
 );
 
 -- ----------------------------------------------------------------------------
--- 4. TABLA: CONFIGURACIÓN Y ESTADO DE TANQUES (machine_tanks)
+-- 5. TABLA: CONFIGURACIÓN Y ESTADO DE TANQUES (machine_tanks)
 -- ----------------------------------------------------------------------------
 CREATE TABLE machine_tanks (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -69,7 +83,7 @@ CREATE TABLE machine_tanks (
 );
 
 -- ----------------------------------------------------------------------------
--- 5. TABLA: INGRESOS DE DINERO POR COMPRA REALIZADA (sale_incomes)
+-- 6. TABLA: INGRESOS DE DINERO POR COMPRA REALIZADA (sale_incomes)
 -- ----------------------------------------------------------------------------
 CREATE TABLE sale_incomes (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -80,7 +94,7 @@ CREATE TABLE sale_incomes (
 );
 
 -- ----------------------------------------------------------------------------
--- 6. TABLA: HISTORIAL DE VENTAS (sales)
+-- 7. TABLA: HISTORIAL DE VENTAS (sales)
 -- ----------------------------------------------------------------------------
 CREATE TABLE sales (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -97,7 +111,7 @@ CREATE TABLE sales (
 );
 
 -- ----------------------------------------------------------------------------
--- 7. TABLA: ARQUEOS Y RECOLECCIÓN DE EFECTIVO (money_collections)
+-- 8. TABLA: ARQUEOS Y RECOLECCIÓN DE EFECTIVO (money_collections)
 -- ----------------------------------------------------------------------------
 CREATE TABLE money_collections (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -105,13 +119,13 @@ CREATE TABLE money_collections (
     payment_type payment_type_enum NOT NULL DEFAULT 'monedas',
     amount_collected NUMERIC(10, 2) NOT NULL CHECK (amount_collected >= 0),
     status collection_status_enum NOT NULL,
-    collector_user_id UUID,
+    collector_user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     notes TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ----------------------------------------------------------------------------
--- 8. TABLA: OPERACIONES DE TANQUE - RECARGAS Y PURGAS (tank_operations)
+-- 9. TABLA: OPERACIONES DE TANQUE - RECARGAS Y PURGAS (tank_operations)
 -- ----------------------------------------------------------------------------
 CREATE TABLE tank_operations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -122,12 +136,12 @@ CREATE TABLE tank_operations (
     tank_liters_before NUMERIC(8, 3) NOT NULL,
     tank_liters_after NUMERIC(8, 3) NOT NULL,
     net_liters NUMERIC(8, 3) GENERATED ALWAYS AS (tank_liters_after - tank_liters_before) STORED,
-    technician_user_id UUID,
+    technician_user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ----------------------------------------------------------------------------
--- 9. TABLA: REGISTRO DE ALERTAS E INCIDENCIAS (system_alerts)
+-- 10. TABLA: REGISTRO DE ALERTAS E INCIDENCIAS (system_alerts)
 -- ----------------------------------------------------------------------------
 CREATE TABLE system_alerts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -145,7 +159,7 @@ CREATE TABLE system_alerts (
 );
 
 -- ----------------------------------------------------------------------------
--- 10. TABLA: SNAPSHOT DE ESTADO Y SALDO DISPONIBLE (machine_status)
+-- 11. TABLA: SNAPSHOT DE ESTADO Y SALDO DISPONIBLE (machine_status)
 -- ----------------------------------------------------------------------------
 CREATE TABLE machine_status (
     machine_id UUID PRIMARY KEY REFERENCES machines(id) ON DELETE CASCADE,
@@ -157,6 +171,41 @@ CREATE TABLE machine_status (
     last_keepalive_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- ----------------------------------------------------------------------------
+-- AUTOMATIZACIÓN DE AUTENTICACIÓN Y ROLES DE PWA
+-- ----------------------------------------------------------------------------
+
+-- Función Auxiliar para verificar rol de Admin evitando recursión en RLS
+CREATE OR REPLACE FUNCTION public.is_admin()
+RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1 FROM public.profiles
+    WHERE id = auth.uid() AND role = 'admin'
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Trigger para creación automática de perfil al registrarse con Google Auth / Email
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.profiles (id, email, full_name, avatar_url, role)
+  VALUES (
+    NEW.id,
+    NEW.email,
+    COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.raw_user_meta_data->>'name', 'Usuario'),
+    NEW.raw_user_meta_data->>'avatar_url',
+    'viewer' -- Rol por defecto asignado a nuevos usuarios
+  );
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
 -- ----------------------------------------------------------------------------
 -- VISTAS PARA DASHBOARDS Y REPORTES MENSUALES
@@ -239,6 +288,7 @@ CREATE INDEX idx_alerts_security_tamper ON system_alerts(machine_id, alert_type,
 -- ----------------------------------------------------------------------------
 -- ROW LEVEL SECURITY (RLS) EN SUPABASE
 -- ----------------------------------------------------------------------------
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE machines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE machine_tanks ENABLE ROW LEVEL SECURITY;
@@ -249,6 +299,23 @@ ALTER TABLE tank_operations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE system_alerts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE machine_status ENABLE ROW LEVEL SECURITY;
 
+-- Políticas para public.profiles
+CREATE POLICY "Permitir lectura del propio perfil" 
+ON public.profiles FOR SELECT TO authenticated 
+USING (auth.uid() = id);
+
+CREATE POLICY "Administradores pueden ver todos los perfiles" 
+ON public.profiles FOR SELECT TO authenticated 
+USING (public.is_admin());
+
+CREATE POLICY "Permitir actualizar propio perfil" 
+ON public.profiles FOR UPDATE TO authenticated 
+USING (auth.uid() = id)
+WITH CHECK (
+  role = (SELECT role FROM public.profiles WHERE id = auth.uid())
+);
+
+-- Políticas operativas
 CREATE POLICY "Lectura autenticada para Dashboard" ON sales FOR SELECT TO authenticated USING (true);
 CREATE POLICY "Lectura pública para catálogo de productos" ON products FOR SELECT TO authenticated, anon USING (true);
 CREATE POLICY "Lectura para tanques" ON machine_tanks FOR SELECT TO authenticated USING (true);

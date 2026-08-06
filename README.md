@@ -37,6 +37,7 @@ Este repositorio contiene la arquitectura de la base de datos en **Supabase (Pos
    - `SUPABASE_URL`: La URL de tu proyecto en Supabase (Project Settings -> API).
    - `SUPABASE_SERVICE_ROLE_KEY`: La clave secreta de rol de servicio (`service_role` secret) para permitir inserciones automáticas por el consumer.
    - `MQTT_BROKER_HOST`: Host de tu broker MQTT (ejemplo: `broker.hivemq.com`).
+   - `MQTT_TOPIC_PREFIX`: Prefijo de tópicos (por defecto `vending`). Esto aísla los mensajes de tus máquinas para evitar interferencias de otros usuarios si usas un broker público.
 
 5. Inicia el servicio consumer:
    ```bash
